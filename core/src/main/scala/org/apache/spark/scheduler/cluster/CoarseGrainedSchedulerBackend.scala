@@ -224,8 +224,9 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
 
     override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
 
-      case RegisterExecutor(executorId, executorRef, hostname, cores, logUrls,
+      case RegisterExecutor(executorId, executorRef, host, cores, logUrls,
           attributes, resources, resourceProfileId) =>
+        val hostname = resolveHost(host)
         if (executorDataMap.contains(executorId)) {
           context.sendFailure(new IllegalStateException(s"Duplicate executor ID: $executorId"))
         } else if (scheduler.excludedNodes.contains(hostname) ||
@@ -256,7 +257,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
               .resourceProfileFromId(resourceProfileId).getNumSlotsPerAddress(rName, conf)
             (info.name, new ExecutorResourceInfo(info.name, info.addresses, numParts))
           }
-          val data = new ExecutorData(executorRef, executorAddress, hostname,
+          val data = new ExecutorData(executorRef, executorAddress, resolveHost(hostname),
             0, cores, logUrlHandler.applyPattern(logUrls, attributes), attributes,
             resourcesInfo, resourceProfileId, registrationTs = System.currentTimeMillis())
           // This must be synchronized because variables mutated

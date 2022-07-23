@@ -1437,6 +1437,13 @@ object SQLConf {
     .booleanConf
     .createWithDefault(true)
 
+  val BATCH_SCAN_REUSE_ENABLED = buildConf("spark.sql.execution.reuseBatchScan")
+    .internal()
+    .doc("")
+    .version("3.2.1")
+    .booleanConf
+    .createWithDefault(true)
+
   val REMOVE_REDUNDANT_PROJECTS_ENABLED = buildConf("spark.sql.execution.removeRedundantProjects")
     .internal()
     .doc("Whether to remove redundant project exec node based on children's output and " +
@@ -3375,6 +3382,13 @@ object SQLConf {
     .intConf
     .createWithDefault(0)
 
+  val POST_PRUNE_COLUMNS = buildConf("spark.sql.postPruneColumns")
+    .internal()
+    .doc("")
+    .version("3.2.1-next")
+    .booleanConf
+    .createWithDefault(true)
+
   /**
    * Holds information about keys that have been deprecated.
    *
@@ -3698,6 +3712,8 @@ class SQLConf extends Serializable with Logging {
   def exchangeReuseEnabled: Boolean = getConf(EXCHANGE_REUSE_ENABLED)
 
   def subqueryReuseEnabled: Boolean = getConf(SUBQUERY_REUSE_ENABLED)
+
+  def batchScanReuseEnabled: Boolean = getConf(BATCH_SCAN_REUSE_ENABLED)
 
   def caseSensitiveAnalysis: Boolean = getConf(SQLConf.CASE_SENSITIVE)
 
@@ -4089,6 +4105,8 @@ class SQLConf extends Serializable with Logging {
   def decorrelateInnerQueryEnabled: Boolean = getConf(SQLConf.DECORRELATE_INNER_QUERY_ENABLED)
 
   def maxConcurrentOutputFileWriters: Int = getConf(SQLConf.MAX_CONCURRENT_OUTPUT_FILE_WRITERS)
+
+  def postPruneColumns: Boolean = getConf(SQLConf.POST_PRUNE_COLUMNS)
 
   /** ********************** SQLConf functionality methods ************ */
 

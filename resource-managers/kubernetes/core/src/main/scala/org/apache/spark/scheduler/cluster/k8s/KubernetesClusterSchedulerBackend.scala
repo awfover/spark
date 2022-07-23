@@ -35,18 +35,29 @@ import org.apache.spark.rpc.{RpcAddress, RpcCallContext}
 import org.apache.spark.scheduler.{ExecutorKilled, ExecutorLossReason, TaskSchedulerImpl}
 import org.apache.spark.scheduler.cluster.{CoarseGrainedSchedulerBackend, SchedulerBackendUtils}
 import org.apache.spark.scheduler.cluster.CoarseGrainedClusterMessages.RegisterExecutor
+import org.apache.spark.scheduler.cluster.k8s.KubernetesKinds.{KUBERNETES_NODE, KUBERNETES_POD}
+import org.apache.spark.scheduler.cluster.k8s.KubernetesResource.getNode
 import org.apache.spark.util.{ThreadUtils, Utils}
 
 private[spark] class KubernetesClusterSchedulerBackend(
-    scheduler: TaskSchedulerImpl,
-    sc: SparkContext,
-    kubernetesClient: KubernetesClient,
-    executorService: ScheduledExecutorService,
-    snapshotsStore: ExecutorPodsSnapshotsStore,
-    podAllocator: ExecutorPodsAllocator,
-    lifecycleEventHandler: ExecutorPodsLifecycleManager,
-    watchEvents: ExecutorPodsWatchSnapshotSource,
-    pollEvents: ExecutorPodsPollingSnapshotSource)
+                                                        scheduler: TaskSchedulerImpl,
+                                                        sc: SparkContext,
+                                                        kubernetesClient: KubernetesClient,
+                                                        executorService: ScheduledExecutorService,
+                                                        snapshotsStore: ExecutorPodsSnapshotsStore,
+                                                        podAllocator: ExecutorPodsAllocator,
+                                                        lifecycleEventHandler:
+                                                          ExecutorPodsLifecycleManager,
+                                                        watchEvents:
+                                                          ExecutorPodsWatchSnapshotSource,
+                                                        pollEvents:
+                                                          ExecutorPodsPollingSnapshotSource,
+                                                        kubernetesWatchEvents:
+                                                          Seq[KubernetesWatchSnapshotSource[_]],
+                                                        kubernetesPollEvents:
+                                                          Seq[KubernetesPollingSnapshotSource],
+                                                        kubernetesResolver:
+                                                          KubernetesResourceResolver)
     extends CoarseGrainedSchedulerBackend(scheduler, sc.env.rpcEnv) {
 
   protected override val minRegisteredRatio =
@@ -99,6 +110,9 @@ private[spark] class KubernetesClusterSchedulerBackend(
     podAllocator.start(applicationId(), this)
     watchEvents.start(applicationId())
     pollEvents.start(applicationId())
+    kubernetesWatchEvents.foreach(_.start(applicationId()))
+    kubernetesPollEvents.foreach(_.start(applicationId()))
+    kubernetesResolver.start(applicationId())
     if (!conf.get(KUBERNETES_EXECUTOR_DISABLE_CONFIGMAP)) {
       setUpExecutorConfigMap(podAllocator.driverPod)
     }
@@ -122,6 +136,14 @@ private[spark] class KubernetesClusterSchedulerBackend(
     Utils.tryLogNonFatalError {
       pollEvents.stop()
     }
+
+    kubernetesWatchEvents.foreach(ev => Utils.tryLogNonFatalError {
+      ev.stop()
+    })
+
+    kubernetesPollEvents.foreach(ev => Utils.tryLogNonFatalError {
+      ev.stop()
+    })
 
     if (shouldDeleteDriverService) {
       Utils.tryLogNonFatalError {
@@ -169,7 +191,10 @@ private[spark] class KubernetesClusterSchedulerBackend(
 
   override def doRequestTotalExecutors(
       resourceProfileToTotalExecs: Map[ResourceProfile, Int]): Future[Boolean] = {
-    podAllocator.setTotalExpectedExecutors(resourceProfileToTotalExecs)
+    podAllocator.setTotalExpectedExecutors(
+      resourceProfileToTotalExecs,
+      rpHostToLocalTaskCount
+    )
     Future.successful(true)
   }
 
@@ -235,6 +260,29 @@ private[spark] class KubernetesClusterSchedulerBackend(
 
   override protected def isExecutorExcluded(executorId: String, hostname: String): Boolean = {
     podAllocator.isDeleted(executorId)
+  }
+
+  override def getRackForHost(host: String): Option[String] = {
+    kubernetesResolver
+      .getOrSearch(Seq("hostname", "ip"), host, Seq(KUBERNETES_POD, KUBERNETES_NODE))
+      .flatMap(getNode(_))
+      .map(node => {
+        logInfo(
+          s"get rack for host $host ${node.hostname} ${node.region} ${node.zone} ${node.zoneLabel}")
+        node.zoneLabel
+      })
+  }
+
+  override def getRacksForHosts(hosts: Seq[String]): Seq[Option[String]] = {
+    hosts.map(getRackForHost)
+  }
+
+  override def resolveHost(host: String): String = {
+    kubernetesResolver
+      .getOrSearch(Seq("hostname", "ip"), host, Seq(KUBERNETES_POD, KUBERNETES_NODE))
+      .flatMap(getNode(_))
+      .flatMap(_.hostname)
+      .getOrElse(host)
   }
 
   private class KubernetesDriverEndpoint extends DriverEndpoint {

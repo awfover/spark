@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.spark.scheduler.cluster.k8s
 
 import java.io.File
@@ -109,11 +110,21 @@ private[spark] class KubernetesClusterManager extends ExternalClusterManager wit
       kubernetesClient,
       snapshotsStore)
 
+    val kubernetesSnapshotsStore = new KubernetesSnapshotsStoreImpl(subscribersExecutor)
+
+    val kubernetesResolver = new KubernetesResourceResolver(
+      sc.conf,
+      sc.listenerBus,
+      kubernetesClient,
+      kubernetesSnapshotsStore
+    )
+
     val executorPodsAllocator = new ExecutorPodsAllocator(
       sc.conf,
       sc.env.securityManager,
       new KubernetesExecutorBuilder(),
       kubernetesClient,
+      kubernetesResolver,
       snapshotsStore,
       new SystemClock())
 
@@ -126,6 +137,20 @@ private[spark] class KubernetesClusterManager extends ExternalClusterManager wit
     val podsPollingEventSource = new ExecutorPodsPollingSnapshotSource(
       sc.conf, kubernetesClient, snapshotsStore, eventsPollingExecutor)
 
+    val kubernetesWatchEventSource = KubernetesWatchSnapshotSources(
+      kubernetesSnapshotsStore,
+      kubernetesClient,
+      kubernetesResolver
+    )
+
+    val kubernetesPollEventSource = KubernetesPollingSnapshotSources(
+      sc.conf,
+      eventsPollingExecutor,
+      kubernetesClient,
+      kubernetesResolver,
+      kubernetesSnapshotsStore
+    )
+
     new KubernetesClusterSchedulerBackend(
       scheduler.asInstanceOf[TaskSchedulerImpl],
       sc,
@@ -135,7 +160,11 @@ private[spark] class KubernetesClusterManager extends ExternalClusterManager wit
       executorPodsAllocator,
       executorPodsLifecycleEventHandler,
       podsWatchEventSource,
-      podsPollingEventSource)
+      podsPollingEventSource,
+      kubernetesWatchEventSource,
+      kubernetesPollEventSource,
+      kubernetesResolver
+    )
   }
 
   override def initialize(scheduler: TaskScheduler, backend: SchedulerBackend): Unit = {

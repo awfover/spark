@@ -39,6 +39,17 @@ trait SparkListenerEvent {
 }
 
 @DeveloperApi
+case class SparkListenerKubernetesResourceResolverMeasurement(
+                                                               phase: String,
+                                                               key: String,
+                                                               value: String,
+                                                               kinds: Seq[String],
+                                                               succeeded: Boolean,
+                                                               time: Long
+                                                             )
+  extends SparkListenerEvent
+
+@DeveloperApi
 case class SparkListenerStageSubmitted(stageInfo: StageInfo, properties: Properties = null)
   extends SparkListenerEvent
 

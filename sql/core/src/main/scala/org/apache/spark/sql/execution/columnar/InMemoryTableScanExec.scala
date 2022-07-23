@@ -37,12 +37,12 @@ case class InMemoryTableScanExec(
     "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"))
 
   override val nodeName: String = {
-    relation.cacheBuilder.tableName match {
+    (relation.cacheBuilder.tableName match {
       case Some(_) =>
         "Scan " + relation.cacheBuilder.cachedName
       case _ =>
         super.nodeName
-    }
+    }) + " (" + relation.cacheBuilder.storageLevel.toString + ")"
   }
 
   override def innerChildren: Seq[QueryPlan[_]] = Seq(relation) ++ super.innerChildren

@@ -25,6 +25,7 @@ private[spark] object Constants {
   val SPARK_ROLE_LABEL = "spark-role"
   val SPARK_POD_DRIVER_ROLE = "driver"
   val SPARK_POD_EXECUTOR_ROLE = "executor"
+  val SPARK_POD_DATASOURCE_ROLE = "datasource"
   val SPARK_EXECUTOR_INACTIVE_LABEL = "spark-exec-inactive"
 
   // Credentials secrets

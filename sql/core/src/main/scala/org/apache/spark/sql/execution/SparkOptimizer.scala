@@ -48,7 +48,12 @@ class SparkOptimizer(
     Batch("Cleanup filters that cannot be pushed down", Once,
       CleanupDynamicPruningFilters,
       PruneFilters)) ++
-    postHocOptimizationBatches :+
+    postHocOptimizationBatches ++
+    (if (catalog.conf.postPruneColumns) {
+      Batch("Prune Columns Again", Once, V2ScanRelationPushDown) :: Nil
+    } else {
+      Nil
+    }) :+
     Batch("Extract Python UDFs", Once,
       ExtractPythonUDFFromJoinCondition,
       // `ExtractPythonUDFFromJoinCondition` can convert a join to a cartesian product.

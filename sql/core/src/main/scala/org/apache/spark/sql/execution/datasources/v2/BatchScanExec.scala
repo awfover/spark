@@ -25,6 +25,7 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.plans.QueryPlan
 import org.apache.spark.sql.catalyst.plans.physical.SinglePartition
+import org.apache.spark.sql.catalyst.trees.TreePattern.{BATCH_SCAN, TreePattern}
 import org.apache.spark.sql.catalyst.util.truncatedString
 import org.apache.spark.sql.connector.read.{InputPartition, PartitionReaderFactory, Scan, SupportsRuntimeFiltering}
 import org.apache.spark.sql.execution.datasources.DataSourceStrategy
@@ -36,6 +37,7 @@ case class BatchScanExec(
     output: Seq[AttributeReference],
     @transient scan: Scan,
     runtimeFilters: Seq[Expression]) extends DataSourceV2ScanExecBase {
+  final override val nodePatterns: Seq[TreePattern] = Seq(BATCH_SCAN)
 
   @transient lazy val batch = scan.toBatch
 

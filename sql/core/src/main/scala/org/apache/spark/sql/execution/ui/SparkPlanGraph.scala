@@ -121,6 +121,18 @@ object SparkPlanGraph {
         // Point to the re-used exchange
         val node = exchanges(planInfo.children.head)
         edges += SparkPlanGraphEdge(node.id, parent.id)
+      case name if name.contains("Scan In-memory table") && exchanges.contains(planInfo) =>
+        val node = exchanges(planInfo)
+        edges += SparkPlanGraphEdge(node.id, parent.id)
+      case "ReusedBatchScan" =>
+        if (exchanges.contains(planInfo.children.head)) {
+          val node = exchanges(planInfo.children.head)
+          edges += SparkPlanGraphEdge(node.id, parent.id)
+        } else {
+          buildSparkPlanGraphNode(
+            planInfo.children.head, nodeIdGenerator, nodes, edges, parent, subgraph, exchanges
+          )
+        }
       case name =>
         val metrics = planInfo.metrics.map { metric =>
           SQLPlanMetric(metric.name, metric.accumulatorId, metric.metricType)
@@ -133,7 +145,10 @@ object SparkPlanGraph {
         } else {
           subgraph.nodes += node
         }
-        if (name.contains("Exchange") || name == "Subquery") {
+        if (name.contains("Exchange") ||
+            name == "Subquery" ||
+            name.contains("Scan In-memory table") ||
+            name == "BatchScan") {
           exchanges += planInfo -> node
         }
 

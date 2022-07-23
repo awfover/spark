@@ -27,6 +27,7 @@ import org.apache.spark.deploy.k8s.submit._
 import org.apache.spark.internal.Logging
 import org.apache.spark.internal.config.ConfigEntry
 import org.apache.spark.resource.ResourceProfile.DEFAULT_RESOURCE_PROFILE_ID
+import org.apache.spark.scheduler.cluster.k8s.KubernetesNode
 import org.apache.spark.util.Utils
 
 /**
@@ -134,7 +135,8 @@ private[spark] class KubernetesExecutorConf(
     val appId: String,
     val executorId: String,
     val driverPod: Option[Pod],
-    val resourceProfileId: Int = DEFAULT_RESOURCE_PROFILE_ID)
+    val resourceProfileId: Int = DEFAULT_RESOURCE_PROFILE_ID,
+    val localityPreferences: Seq[(KubernetesNode, Int)] = Nil)
   extends KubernetesConf(sparkConf) with Logging {
 
   override val resourceNamePrefix: String = {
@@ -221,8 +223,16 @@ private[spark] object KubernetesConf {
       executorId: String,
       appId: String,
       driverPod: Option[Pod],
-      resourceProfileId: Int = DEFAULT_RESOURCE_PROFILE_ID): KubernetesExecutorConf = {
-    new KubernetesExecutorConf(sparkConf.clone(), appId, executorId, driverPod, resourceProfileId)
+      resourceProfileId: Int = DEFAULT_RESOURCE_PROFILE_ID,
+      localityPreferences: Seq[(KubernetesNode, Int)] = Nil): KubernetesExecutorConf = {
+    new KubernetesExecutorConf(
+      sparkConf.clone(),
+      appId,
+      executorId,
+      driverPod,
+      resourceProfileId,
+      localityPreferences
+    )
   }
 
   def getResourceNamePrefix(appName: String): String = {

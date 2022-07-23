@@ -1111,6 +1111,8 @@ private[spark] class TaskSchedulerImpl(
     healthTrackerOpt.map(_.excludedNodeList()).getOrElse(Set.empty)
   }
 
+  def resolveHost(host: String): String = backend.resolveHost(host)
+
   /**
    * Get the rack for one host.
    *
@@ -1118,7 +1120,8 @@ private[spark] class TaskSchedulerImpl(
    * more efficient.
    */
   def getRackForHost(host: String): Option[String] = {
-    getRacksForHosts(Seq(host)).head
+//    getRacksForHosts(Seq(host)).head
+    backend.getRackForHost(host)
   }
 
   /**
@@ -1128,7 +1131,8 @@ private[spark] class TaskSchedulerImpl(
    * together with the hosts argument.
    */
   def getRacksForHosts(hosts: Seq[String]): Seq[Option[String]] = {
-    hosts.map(_ => defaultRackValue)
+//    hosts.map(_ => defaultRackValue)
+    backend.getRacksForHosts(hosts)
   }
 
   private def waitBackendReady(): Unit = {

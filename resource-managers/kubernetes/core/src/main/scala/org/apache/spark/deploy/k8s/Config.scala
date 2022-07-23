@@ -22,6 +22,7 @@ import org.apache.spark.deploy.k8s.Constants._
 import org.apache.spark.internal.Logging
 import org.apache.spark.internal.config.{PYSPARK_DRIVER_PYTHON, PYSPARK_PYTHON}
 import org.apache.spark.internal.config.ConfigBuilder
+import org.apache.spark.scheduler.cluster.k8s.ResolverMode
 
 private[spark] object Config extends Logging {
 
@@ -554,6 +555,32 @@ private[spark] object Config extends Logging {
       .intConf
       .checkValue(value => value > 0, "Maximum number of pending pods should be a positive integer")
       .createWithDefault(Int.MaxValue)
+
+  val KUBERNETES_EXECUTOR_ENABLE_LOCALITY_PREFERENCES =
+    ConfigBuilder("spark.kubernetes.executor.enable.localityPreferences")
+      .doc("")
+      .version("3.2.0-next")
+      .booleanConf
+      .createWithDefault(true)
+
+  val KUBERNETES_RESOURCE_RESOLVER_MODE =
+    ConfigBuilder("spark.kubernetes.resourceResolverMode")
+      .doc("")
+      .version("3.2.0-next")
+      .stringConf
+      .transform(_.capitalize)
+      .checkValue(
+        ResolverMode.values.map(_.toString).contains(_),
+        "Kubernetes resource resolver mode not supported"
+      )
+      .createWithDefault("cached")
+
+  val KUBERNETES_DATASOURCE_LABELS =
+    ConfigBuilder("spark.kubernetes.datasource.labels")
+      .doc("")
+      .version("3.2.0-next")
+      .stringConf
+      .createWithDefault("spark-role=datasource")
 
   val KUBERNETES_DRIVER_LABEL_PREFIX = "spark.kubernetes.driver.label."
   val KUBERNETES_DRIVER_ANNOTATION_PREFIX = "spark.kubernetes.driver.annotation."

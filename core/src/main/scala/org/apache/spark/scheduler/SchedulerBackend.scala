@@ -105,4 +105,20 @@ private[spark] trait SchedulerBackend {
       numPartitions: Int,
       resourceProfileId: Int): Seq[BlockManagerId] = Nil
 
+  def resolveHost(host: String): String = identity(host)
+
+  def getRackForHost(host: String): Option[String] = {
+    getRacksForHosts(Seq(host)).head
+  }
+
+  /**
+   * Get racks for multiple hosts.
+   *
+   * The returned Sequence will be the same length as the hosts argument and can be zipped
+   * together with the hosts argument.
+   */
+  def getRacksForHosts(hosts: Seq[String]): Seq[Option[String]] = {
+    hosts.map(_ => None)
+  }
+
 }

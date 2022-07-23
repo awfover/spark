@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.spark.scheduler.cluster.k8s
 
 import java.time.Instant
@@ -35,21 +36,26 @@ import org.apache.spark.deploy.k8s.KubernetesUtils.addOwnerReference
 import org.apache.spark.internal.Logging
 import org.apache.spark.internal.config.DYN_ALLOCATION_EXECUTOR_IDLE_TIMEOUT
 import org.apache.spark.resource.ResourceProfile
+import org.apache.spark.scheduler.cluster.k8s.KubernetesKinds.KUBERNETES_POD
+import org.apache.spark.scheduler.cluster.k8s.KubernetesResource.getNode
 import org.apache.spark.util.{Clock, Utils}
 
 private[spark] class ExecutorPodsAllocator(
-    conf: SparkConf,
-    secMgr: SecurityManager,
-    executorBuilder: KubernetesExecutorBuilder,
-    kubernetesClient: KubernetesClient,
-    snapshotsStore: ExecutorPodsSnapshotsStore,
-    clock: Clock) extends Logging {
+                                            conf: SparkConf,
+                                            secMgr: SecurityManager,
+                                            executorBuilder: KubernetesExecutorBuilder,
+                                            kubernetesClient: KubernetesClient,
+                                            kubernetesResolver: KubernetesResourceResolver,
+                                            snapshotsStore: ExecutorPodsSnapshotsStore,
+                                            clock: Clock) extends Logging {
 
   private val EXECUTOR_ID_COUNTER = new AtomicInteger(0)
 
   // ResourceProfile id -> total expected executors per profile, currently we don't remove
   // any resource profiles - https://issues.apache.org/jira/browse/SPARK-30749
   private val totalExpectedExecutorsPerResourceProfileId = new ConcurrentHashMap[Int, Int]()
+
+  private var rpIdToLocalTaskCountPerHost = Map.empty[Int, Map[String, Int]]
 
   private val rpIdToResourceProfile = new mutable.HashMap[Int, ResourceProfile]
 
@@ -90,6 +96,9 @@ private[spark] class ExecutorPodsAllocator(
   // snapshot yet but already known by the scheduler backend. Mapped to the ResourceProfile id.
   private val schedulerKnownNewlyCreatedExecs = mutable.LinkedHashMap.empty[Long, Int]
 
+  private val executorIdToLocalityPreferecens =
+    new mutable.HashMap[Long, Seq[(KubernetesNode, Int)]]
+
   private val dynamicAllocationEnabled = Utils.isDynamicAllocationEnabled(conf)
 
   // visible for tests
@@ -118,11 +127,15 @@ private[spark] class ExecutorPodsAllocator(
     }
   }
 
-  def setTotalExpectedExecutors(resourceProfileToTotalExecs: Map[ResourceProfile, Int]): Unit = {
+  def setTotalExpectedExecutors(
+                                 resourceProfileToTotalExecs: Map[ResourceProfile, Int],
+                                 rpHostToLocalTaskCount: Map[Int, Map[String, Int]] = Map.empty
+                               ): Unit = {
     resourceProfileToTotalExecs.foreach { case (rp, numExecs) =>
       rpIdToResourceProfile.getOrElseUpdate(rp.id, rp)
       totalExpectedExecutorsPerResourceProfileId.put(rp.id, numExecs)
     }
+    rpIdToLocalTaskCountPerHost = rpHostToLocalTaskCount
     logDebug(s"Set total expected execs to $totalExpectedExecutorsPerResourceProfileId")
     if (numOutstandingPods.get() == 0) {
       snapshotsStore.notifySubscribers()
@@ -277,6 +290,28 @@ private[spark] class ExecutorPodsAllocator(
         newlyCreatedExecutorsForRpId.size + schedulerKnownNewlyCreatedExecsForRpId.size
       val podCountForRpId = currentRunningCount + notRunningPodCountForRpId
 
+        val allocatedHostToExecutorCount = podsForRpId
+          .map { case (id, state: ExecutorPodState) =>
+            KubernetesPod(state.pod, kubernetesResolver).node -> id
+          }
+          .filter(_._1.isDefined)
+          .map { case (host, id) => host.get -> id }
+          .groupBy(_._1)
+          .map { case (host, ids) => host -> ids.size }
+
+        val unallocatedExecutorIds = (podsForRpId.filter {
+            case (_, state: ExecutorPodState) =>
+              state.pod.getSpec.getHostname.isEmpty &&
+                state.pod.getMetadata.getLabels.containsKey(SPARK_EXECUTOR_ID_LABEL)
+          }.map(_._2.pod.getMetadata.getLabels.get(SPARK_EXECUTOR_ID_LABEL).toLong) ++
+          newlyCreatedExecutorsForRpId.keySet ++
+          schedulerKnownNewlyCreatedExecsForRpId.keySet).toSet
+
+        val unallocatedHostExecutorPreferences = executorIdToLocalityPreferecens
+          .filterKeys(unallocatedExecutorIds.contains)
+          .values
+          .toSeq
+
       if (podCountForRpId > targetNum) {
         val excess = podCountForRpId - targetNum
         val newlyCreatedToDelete = newlyCreatedExecutorsForRpId
@@ -301,6 +336,7 @@ private[spark] class ExecutorPodsAllocator(
               .withLabel(SPARK_ROLE_LABEL, SPARK_POD_EXECUTOR_ROLE)
               .withLabelIn(SPARK_EXECUTOR_ID_LABEL, toDelete.sorted.map(_.toString): _*)
               .delete()
+            executorIdToLocalityPreferecens --= toDelete
             newlyCreatedExecutors --= newlyCreatedToDelete
             pendingCountForRpId -= pendingToDelete.size
             notRunningPodCountForRpId -= toDelete.size
@@ -326,7 +362,13 @@ private[spark] class ExecutorPodsAllocator(
         }
       }
       if (newlyCreatedExecutorsForRpId.isEmpty && podCountForRpId < targetNum) {
-        Some(rpId, podCountForRpId, targetNum)
+        Some(
+          rpId,
+          podCountForRpId,
+          targetNum,
+          allocatedHostToExecutorCount,
+          unallocatedHostExecutorPreferences
+        )
       } else {
         // for this resource profile we do not request more PODs
         None
@@ -336,14 +378,65 @@ private[spark] class ExecutorPodsAllocator(
     val remainingSlotFromPendingPods = maxPendingPods - totalNotRunningPodCount
     if (remainingSlotFromPendingPods > 0 && podsToAllocateWithRpId.size > 0) {
       ExecutorPodsAllocator.splitSlots(podsToAllocateWithRpId, remainingSlotFromPendingPods)
-        .foreach { case ((rpId, podCountForRpId, targetNum), sharedSlotFromPendingPods) =>
+        .foreach { case (
+            (
+              rpId,
+              podCountForRpId,
+              targetNum,
+              allocatedHostToExecutorCount,
+              unallocatedHostExecutorPreferences
+            ),
+            sharedSlotFromPendingPods
+          ) =>
         val numMissingPodsForRpId = targetNum - podCountForRpId
         val numExecutorsToAllocate =
           math.min(math.min(numMissingPodsForRpId, podAllocationSize), sharedSlotFromPendingPods)
         logInfo(s"Going to request $numExecutorsToAllocate executors from Kubernetes for " +
           s"ResourceProfile Id: $rpId, target: $targetNum, known: $podCountForRpId, " +
           s"sharedSlotFromPendingPods: $sharedSlotFromPendingPods.")
-        requestNewExecutors(numExecutorsToAllocate, applicationId, rpId, k8sKnownPVCNames)
+
+          import LocalityPreferredExecutorPlacementStrategy._
+
+          val hostToLocalTaskCount = rpIdToLocalTaskCountPerHost.getOrElse(
+            rpId,
+            Map.empty
+          ).toSeq.map { case (host, n) =>
+            kubernetesResolver
+              .getOrSearch(Seq("hostname", "ip"), host, Seq(KUBERNETES_POD))
+              .flatMap(getNode(_))
+              .map(node => node -> n)
+            }
+            .filter(_.isDefined)
+            .map(_.get)
+            .groupBy(_._1)
+            .map { case (node, values) => node -> values.map(_._2).sum }
+
+          logInfo(s"[x] host to local task count ${
+            hostToLocalTaskCount
+              .map { case (node, cnt) => node.hostname -> cnt }
+              .mkString(", ")
+          }")
+          logInfo(
+            s"[x] allocated host to executor count ${
+              allocatedHostToExecutorCount
+                .map { case (node, cnt) => node.hostname -> cnt }
+                .mkString(",")}"
+          )
+
+          val executorLocalityPreferences = localityOfRequestedExecutors(
+          numExecutorsToAllocate,
+          hostToLocalTaskCount,
+          allocatedHostToExecutorCount,
+            unallocatedHostExecutorPreferences
+        )
+
+          requestNewExecutors(
+            numExecutorsToAllocate,
+            applicationId,
+            rpId,
+            k8sKnownPVCNames,
+            executorLocalityPreferences
+          )
       }
     }
     deletedExecutorIds = _deletedExecutorIds
@@ -376,17 +469,21 @@ private[spark] class ExecutorPodsAllocator(
       numExecutorsToAllocate: Int,
       applicationId: String,
       resourceProfileId: Int,
-      pvcsInUse: Seq[String]): Unit = {
+      pvcsInUse: Seq[String],
+      executorLocalityPreferences: Seq[Seq[(KubernetesNode, Int)]]
+  ): Unit = {
     // Check reusable PVCs for this executor allocation batch
     val reusablePVCs = getReusablePVCs(applicationId, pvcsInUse)
-    for ( _ <- 0 until numExecutorsToAllocate) {
+    for ( i <- 0 until numExecutorsToAllocate) {
       val newExecutorId = EXECUTOR_ID_COUNTER.incrementAndGet()
       val executorConf = KubernetesConf.createExecutorConf(
         conf,
         newExecutorId.toString,
         applicationId,
         driverPod,
-        resourceProfileId)
+        resourceProfileId,
+        executorLocalityPreferences(i)
+      )
       val resolvedExecutorSpec = executorBuilder.buildFromFeatures(executorConf, secMgr,
         kubernetesClient, rpIdToResourceProfile(resourceProfileId))
       val executorPod = resolvedExecutorSpec.pod
@@ -412,6 +509,7 @@ private[spark] class ExecutorPodsAllocator(
             kubernetesClient.persistentVolumeClaims().create(pvc)
           }
         newlyCreatedExecutors(newExecutorId) = (resourceProfileId, clock.getTimeMillis())
+        executorIdToLocalityPreferecens(newExecutorId) = executorLocalityPreferences(i)
         logDebug(s"Requested executor with id $newExecutorId from Kubernetes.")
       } catch {
         case NonFatal(e) =>

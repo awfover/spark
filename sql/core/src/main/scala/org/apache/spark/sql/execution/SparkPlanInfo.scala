@@ -20,6 +20,7 @@ package org.apache.spark.sql.execution
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.sql.execution.adaptive.{AdaptiveSparkPlanExec, QueryStageExec}
 import org.apache.spark.sql.execution.columnar.InMemoryTableScanExec
+import org.apache.spark.sql.execution.datasources.v2.ReusedBatchScanExec
 import org.apache.spark.sql.execution.exchange.ReusedExchangeExec
 import org.apache.spark.sql.execution.metric.SQLMetricInfo
 import org.apache.spark.sql.internal.SQLConf
@@ -54,6 +55,7 @@ private[execution] object SparkPlanInfo {
   def fromSparkPlan(plan: SparkPlan): SparkPlanInfo = {
     val children = plan match {
       case ReusedExchangeExec(_, child) => child :: Nil
+      case ReusedBatchScanExec(_, child) => child :: Nil
       case ReusedSubqueryExec(child) => child :: Nil
       case a: AdaptiveSparkPlanExec => a.executedPlan :: Nil
       case stage: QueryStageExec => stage.plan :: Nil

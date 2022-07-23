@@ -131,4 +131,6 @@ object TreePattern extends Enumeration  {
 
   // Execution Plan patterns (alphabetically ordered)
   val EXCHANGE: Value = Value
+
+  val BATCH_SCAN: Value = Value
 }

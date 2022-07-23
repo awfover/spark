@@ -20,7 +20,7 @@
   <parent>
     <groupId>org.apache.spark</groupId>
     <artifactId>spark-parent_2.12</artifactId>
-    <version>3.2.1</version>
+    <version>3.2.1-next</version>
     <relativePath>../../../pom.xml</relativePath>
   </parent>
 
@@ -78,6 +78,12 @@
       <groupId>com.fasterxml.jackson.dataformat</groupId>
       <artifactId>jackson-dataformat-yaml</artifactId>
       <version>${fasterxml.jackson.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>commons-validator</groupId>
+      <artifactId>commons-validator</artifactId>
+      <version>1.7</version>
     </dependency>
 
     <!-- Explicitly depend on shaded dependencies from the parent, since shaded deps aren't transitive -->

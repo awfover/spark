@@ -434,7 +434,8 @@ object QueryExecution {
         Nil
       } else {
         Seq(ReuseExchangeAndSubquery)
-      })
+      }) ++
+      sparkSession.sessionState.prepRules
   }
 
   /**

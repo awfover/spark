@@ -272,10 +272,12 @@ private[spark] class TaskSetManager(
           }
         case _ =>
       }
-      pendingTaskSetToAddTo.forHost.getOrElseUpdate(loc.host, new ArrayBuffer) += index
+
+      val host = sched.resolveHost(loc.host)
+      pendingTaskSetToAddTo.forHost.getOrElseUpdate(host, new ArrayBuffer) += index
 
       if (resolveRacks) {
-        sched.getRackForHost(loc.host).foreach { rack =>
+        sched.getRackForHost(host).foreach { rack =>
           pendingTaskSetToAddTo.forRack.getOrElseUpdate(rack, new ArrayBuffer) += index
         }
       }

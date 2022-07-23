@@ -59,6 +59,9 @@ private[spark] class BasicExecutorFeatureStep(
   private val isDefaultProfile = resourceProfile.id == ResourceProfile.DEFAULT_RESOURCE_PROFILE_ID
   private val isPythonApp = kubernetesConf.get(APP_RESOURCE_TYPE) == Some(APP_RESOURCE_TYPE_PYTHON)
   private val disableConfigMap = kubernetesConf.get(KUBERNETES_EXECUTOR_DISABLE_CONFIGMAP)
+  private val enableLocalityPreferences = kubernetesConf.get(
+    KUBERNETES_EXECUTOR_ENABLE_LOCALITY_PREFERENCES
+  )
 
   val execResources = ResourceProfile.getResourcesForClusterManager(
     resourceProfile.id,
@@ -258,7 +261,7 @@ private[spark] class BasicExecutorFeatureStep(
         .withUid(pod.getMetadata.getUid)
         .build()
     }
-    val executorPodBuilder = new PodBuilder(pod.pod)
+    var executorPodBuilder = new PodBuilder(pod.pod)
       .editOrNewMetadata()
         .withName(name)
         .addToLabels(kubernetesConf.labels.asJava)
@@ -270,8 +273,9 @@ private[spark] class BasicExecutorFeatureStep(
         .withRestartPolicy("Never")
         .addToNodeSelector(kubernetesConf.nodeSelector.asJava)
         .addToImagePullSecrets(kubernetesConf.imagePullSecrets: _*)
-    val executorPod = if (disableConfigMap) {
-      executorPodBuilder.endSpec().build()
+
+    executorPodBuilder = if (disableConfigMap) {
+      executorPodBuilder
     } else {
       executorPodBuilder
         .addNewVolume()
@@ -281,9 +285,40 @@ private[spark] class BasicExecutorFeatureStep(
             .withName(configMapName)
             .endConfigMap()
           .endVolume()
-        .endSpec()
-      .build()
     }
+
+    val executorPod = if (enableLocalityPreferences) {
+      executorPodBuilder
+        .editOrNewAffinity()
+        .withNodeAffinity(
+          new NodeAffinityBuilder()
+            .addAllToPreferredDuringSchedulingIgnoredDuringExecution(
+              kubernetesConf
+                .localityPreferences
+                .filter { case (node, _ ) => node.hostname.isDefined }
+                .map { case (node, weight) =>
+                  new PreferredSchedulingTermBuilder()
+                    .editOrNewPreference()
+                      .addNewMatchExpression()
+                      .withKey("kubernetes.io/hostname")
+                      .withOperator("In")
+                      .withValues(node.hostname.get)
+                      .endMatchExpression()
+                    .endPreference()
+                    .withWeight(weight)
+                    .build()
+                }
+                .asJava
+            )
+            .build()
+        )
+        .and()
+        .endSpec()
+        .build()
+    } else {
+      executorPodBuilder.endSpec().build()
+    }
+
     kubernetesConf.get(KUBERNETES_EXECUTOR_SCHEDULER_NAME)
       .foreach(executorPod.getSpec.setSchedulerName)
 
